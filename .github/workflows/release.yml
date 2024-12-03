@@ -1,0 +1,51 @@
+on:
+  push:
+    tags:
+      - "*"
+
+name: Release policy
+
+jobs:
+  calculate-policy-from-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: calculate-vars
+        shell: bash
+        run: |
+          # we expect a tag on the form of: ControllerContainerBlockSSHPort/v0.1.0
+          # and want:
+          #   policy-working-dir="policies/ControllerContainerBlockSSHPort"
+          #   policy-version="v0.1.0"
+          echo "policy-working-dir=$( echo ${{ github.ref_name }} | sed 's/\(.*\)\/\(.*\)$/\1/' )" >> $GITHUB_OUTPUT
+          echo "policy-version=$( echo ${{ github.ref_name }} | sed 's/\(.*\)\/\(.*\)$/\2/' )" >> $GITHUB_OUTPUT
+          if [ ! -d "$policy-working-dir" ]; then
+            echo "$policy-working-dir does not exist, policy not found"
+            exit 1
+          fi
+
+  unit-tests:
+    needs: calculate-policy-from-tag
+    name: run unit tests and linters
+    uses: kubewarden/github-actions/.github/workflows/reusable-test-policy-rego.yml@v3.4.0
+    with:
+      policy-working-dir: ${{ needs.calculate-policy-from-tag.ouputs.policy-working-dir }}
+      policy-version: ${{ needs.calculate-policy-from-tag.ouputs.policy-version }}
+
+  release:
+    needs: [unit-tests, calculate-policy-from-tag]
+    permissions:
+      # Required to create GH releases
+      contents: write
+      # Required to push to GHCR
+      packages: write
+      # Required by cosign keyless signing
+      id-token: write
+    concurrency:
+      group: release-policy # only allow 1 release job of "release-policy" concurrently
+      cancel-in-progress: false
+    uses: kubewarden/github-actions/.github/workflows/reusable-release-policy-rego.yml@v3.4.0
+    with:
+      oci-target: ghcr.io/${{ github.repository_owner }}/tests/raw-validation-opa-policy
+      policy-working-dir: ${{ needs.calculate-policy-from-tag.ouputs.policy-working-dir }}
+      policy-version: ${{ needs.calculate-policy-from-tag.ouputs.policy-version }}
